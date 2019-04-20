@@ -26,9 +26,23 @@ fn main() {
         parquet_partitions.push(Arc::new(Mutex::new(parquet_channel)));
     }
 
-    let mut part0 = parquet_partitions[0].lock().unwrap();
-    let batch = part0.next().unwrap().unwrap();
-    println!("rows = {}", batch.num_rows());
+    //TODO: wrap parquet partitions in other partitions e.g. projection, selection
+
+    // start threads to execute the partitions
+    let mut handles = vec![];
+    for partition in &parquet_partitions {
+        let partition = partition.clone();
+        handles.push(thread::spawn(move || {
+            println!("Starting thread");
+            let mut part0 = partition.lock().unwrap();
+            let batch = part0.next().unwrap().unwrap();
+            println!("rows = {}", batch.num_rows());
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
 
 }
 
@@ -65,6 +79,15 @@ impl ParquetChannel {
         }
 
     }
+}
+
+/// Iterator for reading a series of record batches with a known schema
+pub trait ThreadSafeRecordBatchIterator {
+    /// Get the schema of this iterator
+    fn schema(&self) -> &Arc<Schema>;
+
+    /// Get the next batch in this iterator
+    fn next(&mut self) -> Result<Option<RecordBatch>>;
 }
 
 impl RecordBatchIterator for ParquetChannel {
