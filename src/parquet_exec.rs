@@ -1,8 +1,8 @@
+use arrow::datatypes::Schema;
 use std::fs;
 use std::fs::File;
 use std::sync::Arc;
 use std::thread;
-use arrow::datatypes::Schema;
 
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::datasource::RecordBatchIterator;
@@ -10,7 +10,7 @@ use datafusion::datasource::datasource::RecordBatchIterator;
 use datafusion::datasource::parquet::ParquetFile;
 use datafusion::error::{ExecutionError, Result};
 
-use crossbeam::crossbeam_channel::{Sender, Receiver, unbounded};
+use crossbeam::crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::execution::{ExecutionPlan, ThreadSafeRecordBatchIterator};
 
