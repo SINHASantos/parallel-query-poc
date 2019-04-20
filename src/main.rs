@@ -17,7 +17,7 @@ fn main() {
 
     let dir = "data";
 
-    let mut parquet_partitions : Vec<Arc<Mutex<ParquetChannel>>> = vec![];
+    let mut parquet_partitions : Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> = vec![];
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let filename = format!("{}/{}", dir, entry.file_name().to_str().unwrap());
@@ -27,15 +27,22 @@ fn main() {
     }
 
     //TODO: wrap parquet partitions in other partitions e.g. projection, selection
+    let filter_partitions: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> = parquet_partitions.iter().map(|p| {
+        Arc::new(Mutex::new(FilterPartition {
+            input: p.clone()
+        })) as Arc<Mutex<ThreadSafeRecordBatchIterator>>
+    }).collect();
+
+    let query_partitions = filter_partitions;
 
     // start threads to execute the partitions
     let mut handles = vec![];
-    for partition in &parquet_partitions {
+    for partition in &query_partitions {
         let partition = partition.clone();
         handles.push(thread::spawn(move || {
             println!("Starting thread");
-            let mut part0 = partition.lock().unwrap();
-            let batch = part0.next().unwrap().unwrap();
+            let partition = partition.lock().unwrap();
+            let batch = partition.next().unwrap().unwrap();
             println!("rows = {}", batch.num_rows());
         }));
     }
@@ -44,6 +51,22 @@ fn main() {
         handle.join().unwrap();
     }
 
+}
+
+struct FilterPartition {
+    input: Arc<Mutex<ThreadSafeRecordBatchIterator>>
+}
+
+impl ThreadSafeRecordBatchIterator for FilterPartition {
+    fn schema(&self) -> &Arc<Schema> {
+        unimplemented!()
+    }
+
+    fn next(&self) -> Result<Option<RecordBatch>> {
+        let batch = self.input.lock().unwrap().next();
+        println!("Filtering batch");
+        batch
+    }
 }
 
 /// Because we can't send ParquetFile between threads currently, we need to create the ParquetFile
@@ -82,21 +105,21 @@ impl ParquetChannel {
 }
 
 /// Iterator for reading a series of record batches with a known schema
-pub trait ThreadSafeRecordBatchIterator {
+pub trait ThreadSafeRecordBatchIterator: Send {
     /// Get the schema of this iterator
     fn schema(&self) -> &Arc<Schema>;
 
     /// Get the next batch in this iterator
-    fn next(&mut self) -> Result<Option<RecordBatch>>;
+    fn next(&self) -> Result<Option<RecordBatch>>;
 }
 
-impl RecordBatchIterator for ParquetChannel {
+impl ThreadSafeRecordBatchIterator for ParquetChannel {
 
     fn schema(&self) -> &Arc<Schema> {
         unimplemented!()
     }
 
-    fn next(&mut self) -> Result<Option<RecordBatch>> {
+    fn next(&self) -> Result<Option<RecordBatch>> {
         self.request_tx.send(()).unwrap();
         Ok(Some(self.response_rx.recv().unwrap()))
     }
