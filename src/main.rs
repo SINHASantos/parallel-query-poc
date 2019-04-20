@@ -1,5 +1,5 @@
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread;
@@ -17,17 +17,16 @@ fn main() {
 
     let dir = "data";
 
-    let mut parquet_partitions : Vec<Arc<ParquetChannel>> = vec![];
+    let mut parquet_partitions : Vec<Arc<Mutex<ParquetChannel>>> = vec![];
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let filename = format!("{}/{}", dir, entry.file_name().to_str().unwrap());
         println!("{}", filename);
         let parquet_channel = ParquetChannel::open(&filename);
-        parquet_partitions.push(Arc::new(parquet_channel));
+        parquet_partitions.push(Arc::new(Mutex::new(parquet_channel)));
     }
 
-    use std::borrow::BorrowMut;
-    let part0 = parquet_partitions[0].borrow_mut();
+    let mut part0 = parquet_partitions[0].lock().unwrap();
     let batch = part0.next().unwrap().unwrap();
     println!("rows = {}", batch.num_rows());
 
