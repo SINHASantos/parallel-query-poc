@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::builder::Int32Builder;
@@ -22,23 +22,23 @@ impl FilterExec {
 }
 
 impl ExecutionPlan for FilterExec {
-    fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> {
+    fn execute(&self) -> Vec<Arc<ThreadSafeRecordBatchIterator>> {
         let predicate = self.predicate.clone();
         self.input
             .execute()
             .iter()
             .map(move |p| {
-                Arc::new(Mutex::new(FilterPartition {
+                Arc::new(FilterPartition {
                     input: p.clone(),
                     predicate: predicate.clone(),
-                })) as Arc<Mutex<ThreadSafeRecordBatchIterator>>
+                }) as Arc<ThreadSafeRecordBatchIterator>
             })
-            .collect::<Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>>()
+            .collect::<Vec<Arc<ThreadSafeRecordBatchIterator>>>()
     }
 }
 
 pub struct FilterPartition {
-    input: Arc<Mutex<ThreadSafeRecordBatchIterator>>,
+    input: Arc<ThreadSafeRecordBatchIterator>,
     predicate: Arc<Func>,
 }
 
@@ -48,7 +48,7 @@ impl ThreadSafeRecordBatchIterator for FilterPartition {
     }
 
     fn next(&self) -> Result<Option<RecordBatch>> {
-        match self.input.lock().unwrap().next()? {
+        match self.input.next()? {
             Some(batch) => {
                 println!("Filtering batch");
                 self.predicate.execute(&batch)?;

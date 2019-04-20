@@ -22,7 +22,6 @@ fn main() {
         let partition = partition.clone();
         handles.push(thread::spawn(move || {
             println!("Starting thread");
-            let partition = partition.lock().unwrap();
             let mut count = 0;
             loop {
                 match partition.next() {
