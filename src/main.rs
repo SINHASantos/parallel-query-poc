@@ -5,19 +5,35 @@ use std::thread;
 
 use std::fs::{self, File};
 
+use arrow::array::ArrayRef;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 
 use datafusion::datasource::datasource::RecordBatchIterator;
 use datafusion::datasource::parquet::ParquetFile;
 use datafusion::error::Result;
+use arrow::builder::Int32Builder;
+
+trait Func: Send + Sync {
+    fn execute(&self, batch: &RecordBatch) -> Result<ArrayRef>;
+}
+
+struct FilterFunc {
+}
+impl Func for FilterFunc {
+    fn execute(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
+        //TODO implement
+        Ok(Arc::new(Int32Builder::new(0).finish()) as ArrayRef)
+    }
+}
 
 fn main() {
     // create execution plan to read parquet partitions
     let parquet_exec = ParquetExec::new("data");
 
-    // create excution plan to apply a selection
-    let filter_exec = FilterExec::new(Arc::new(parquet_exec), "id > 123".to_string());
+    // create execution plan to apply a selection
+    let predicate = FilterFunc {};
+    let filter_exec = FilterExec::new(Arc::new(parquet_exec), Arc::new(predicate));
 
     // execute the top level plan with one thread per partition
     let filter_partitions = filter_exec.execute();
@@ -83,22 +99,23 @@ impl ExecutionPlan for ParquetExec {
 /// Selection e.g. apply predicate to filter rows from the record batches
 struct FilterExec {
     input: Arc<ExecutionPlan>,
-    predicate: String,
+    predicate: Arc<Func>,
 }
 
 impl FilterExec {
-    pub fn new(input: Arc<ExecutionPlan>, predicate: String) -> Self {
+    pub fn new(input: Arc<ExecutionPlan>, predicate: Arc<Func>) -> Self {
         Self { input, predicate }
     }
 }
 
 impl ExecutionPlan for FilterExec {
     fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> {
+        let predicate = self.predicate.clone();
         self.input
             .execute()
             .iter()
-            .map(|p| {
-                Arc::new(Mutex::new(FilterPartition { input: p.clone() }))
+            .map(move |p| {
+                Arc::new(Mutex::new(FilterPartition { input: p.clone(), predicate: predicate.clone() }))
                     as Arc<Mutex<ThreadSafeRecordBatchIterator>>
             })
             .collect::<Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>>()
@@ -107,6 +124,7 @@ impl ExecutionPlan for FilterExec {
 
 struct FilterPartition {
     input: Arc<Mutex<ThreadSafeRecordBatchIterator>>,
+    predicate: Arc<Func>,
 }
 
 impl ThreadSafeRecordBatchIterator for FilterPartition {
@@ -115,9 +133,14 @@ impl ThreadSafeRecordBatchIterator for FilterPartition {
     }
 
     fn next(&self) -> Result<Option<RecordBatch>> {
-        let batch = self.input.lock().unwrap().next();
-        println!("Filtering batch");
-        batch
+        match self.input.lock().unwrap().next()? {
+            Some(batch) => {
+                println!("Filtering batch");
+                self.predicate.execute(&batch)?;
+                Ok(Some(batch))
+            }
+            None => Ok(None)
+        }
     }
 }
 
