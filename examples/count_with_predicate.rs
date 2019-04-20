@@ -7,7 +7,6 @@ use parallel_query_poc::parquet_exec::*;
 
 /// This example is simulating a SELECT COUNT(*) FROM data WHERE condition
 fn main() {
-
     // create execution plan to read parquet partitions
     let parquet_exec = ParquetExec::new("data");
 
@@ -22,7 +21,6 @@ fn main() {
         let partition = partition.clone();
         handles.push(thread::spawn(move || {
             println!("Starting thread");
-            let partition = partition.lock().unwrap();
             let mut count = 0;
             loop {
                 match partition.next() {

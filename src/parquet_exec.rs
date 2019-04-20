@@ -1,16 +1,16 @@
+use arrow::datatypes::Schema;
 use std::fs;
 use std::fs::File;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
-use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-
 use datafusion::datasource::datasource::RecordBatchIterator;
+
 use datafusion::datasource::parquet::ParquetFile;
 use datafusion::error::{ExecutionError, Result};
+
+use crossbeam::crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::execution::{ExecutionPlan, ThreadSafeRecordBatchIterator};
 
@@ -29,14 +29,14 @@ impl ParquetExec {
 }
 
 impl ExecutionPlan for ParquetExec {
-    fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> {
-        let mut parquet_partitions: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> = vec![];
+    fn execute(&self) -> Vec<Arc<ThreadSafeRecordBatchIterator>> {
+        let mut parquet_partitions: Vec<Arc<ThreadSafeRecordBatchIterator>> = vec![];
         for entry in fs::read_dir(&self.dir).unwrap() {
             let entry = entry.unwrap();
             let filename = format!("{}/{}", &self.dir, entry.file_name().to_str().unwrap());
             println!("{}", filename);
             let parquet_channel = ParquetChannel::open(&filename);
-            parquet_partitions.push(Arc::new(Mutex::new(parquet_channel)));
+            parquet_partitions.push(Arc::new(parquet_channel));
         }
         parquet_partitions
     }
@@ -51,11 +51,11 @@ pub struct ParquetChannel {
 
 impl ParquetChannel {
     pub fn open(filename: &str) -> Self {
-        let (request_tx, request_rx): (Sender<()>, Receiver<()>) = mpsc::channel();
+        let (request_tx, request_rx): (Sender<()>, Receiver<()>) = unbounded();
         let (response_tx, response_rx): (
             Sender<Option<RecordBatch>>,
             Receiver<Option<RecordBatch>>,
-        ) = mpsc::channel();
+        ) = unbounded();
 
         let filename = filename.to_string();
 
