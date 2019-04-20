@@ -1,7 +1,6 @@
-
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use std::fs::{self, File};
@@ -9,35 +8,22 @@ use std::fs::{self, File};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 
-use datafusion::datasource::parquet::ParquetFile;
 use datafusion::datasource::datasource::RecordBatchIterator;
+use datafusion::datasource::parquet::ParquetFile;
 use datafusion::error::Result;
 
 fn main() {
+    let parquet_exec = ParquetExec::new("data");
 
-    let dir = "data";
+    let parquet_partitions = parquet_exec.execute();
 
-    let mut parquet_partitions : Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> = vec![];
-    for entry in fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        let filename = format!("{}/{}", dir, entry.file_name().to_str().unwrap());
-        println!("{}", filename);
-        let parquet_channel = ParquetChannel::open(&filename);
-        parquet_partitions.push(Arc::new(Mutex::new(parquet_channel)));
-    }
+    let filter_exec = FilterExec::new(parquet_partitions, "id > 123".to_string());
 
-    //TODO: wrap parquet partitions in other partitions e.g. projection, selection
-    let filter_partitions: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> = parquet_partitions.iter().map(|p| {
-        Arc::new(Mutex::new(FilterPartition {
-            input: p.clone()
-        })) as Arc<Mutex<ThreadSafeRecordBatchIterator>>
-    }).collect();
-
-    let query_partitions = filter_partitions;
+    let filter_partitions = filter_exec.execute();
 
     // start threads to execute the partitions
     let mut handles = vec![];
-    for partition in &query_partitions {
+    for partition in &filter_partitions {
         let partition = partition.clone();
         handles.push(thread::spawn(move || {
             println!("Starting thread");
@@ -47,14 +33,68 @@ fn main() {
         }));
     }
 
+    // wait for threads to finish
     for handle in handles {
         handle.join().unwrap();
     }
+}
 
+trait ExecutionPlan {
+    fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>;
+}
+
+struct ParquetExec {
+    filename: String,
+}
+
+impl ParquetExec {
+    pub fn new(filename: &str) -> Self {
+        Self {
+            filename: filename.to_string(),
+        }
+    }
+}
+
+impl ExecutionPlan for ParquetExec {
+    fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> {
+        let mut parquet_partitions: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> = vec![];
+        for entry in fs::read_dir(&self.filename).unwrap() {
+            let entry = entry.unwrap();
+            let filename = format!("{}/{}", &self.filename, entry.file_name().to_str().unwrap());
+            println!("{}", filename);
+            let parquet_channel = ParquetChannel::open(&filename);
+            parquet_partitions.push(Arc::new(Mutex::new(parquet_channel)));
+        }
+        parquet_partitions
+    }
+}
+
+/// Selection e.g. apply predicate to filter rows from the record batches
+struct FilterExec {
+    input: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>,
+    predicate: String,
+}
+
+impl FilterExec {
+    pub fn new(input: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>, predicate: String) -> Self {
+        Self { input, predicate }
+    }
+}
+
+impl ExecutionPlan for FilterExec {
+    fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> {
+        self.input
+            .iter()
+            .map(|p| {
+                Arc::new(Mutex::new(FilterPartition { input: p.clone() }))
+                    as Arc<Mutex<ThreadSafeRecordBatchIterator>>
+            })
+            .collect::<Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>>()
+    }
 }
 
 struct FilterPartition {
-    input: Arc<Mutex<ThreadSafeRecordBatchIterator>>
+    input: Arc<Mutex<ThreadSafeRecordBatchIterator>>,
 }
 
 impl ThreadSafeRecordBatchIterator for FilterPartition {
@@ -73,15 +113,14 @@ impl ThreadSafeRecordBatchIterator for FilterPartition {
 /// in it's own thread and use channels to communicate with it
 struct ParquetChannel {
     request_tx: Sender<()>,
-    response_rx: Receiver<RecordBatch>
+    response_rx: Receiver<RecordBatch>,
 }
 
 impl ParquetChannel {
-
     pub fn open(filename: &str) -> Self {
-
         let (request_tx, request_rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-        let (response_tx, response_rx): (Sender<RecordBatch>, Receiver<RecordBatch>) = mpsc::channel();
+        let (response_tx, response_rx): (Sender<RecordBatch>, Receiver<RecordBatch>) =
+            mpsc::channel();
 
         let filename = filename.to_string();
 
@@ -98,9 +137,9 @@ impl ParquetChannel {
         });
 
         ParquetChannel {
-            request_tx, response_rx
+            request_tx,
+            response_rx,
         }
-
     }
 }
 
@@ -114,7 +153,6 @@ pub trait ThreadSafeRecordBatchIterator: Send {
 }
 
 impl ThreadSafeRecordBatchIterator for ParquetChannel {
-
     fn schema(&self) -> &Arc<Schema> {
         unimplemented!()
     }
