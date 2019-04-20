@@ -15,13 +15,12 @@ use datafusion::error::Result;
 fn main() {
     // create execution plan to read parquet partitions
     let parquet_exec = ParquetExec::new("data");
-    let parquet_partitions = parquet_exec.execute();
 
     // create excution plan to apply a selection
-    let filter_exec = FilterExec::new(parquet_partitions, "id > 123".to_string());
-    let filter_partitions = filter_exec.execute();
+    let filter_exec = FilterExec::new(Arc::new(parquet_exec), "id > 123".to_string());
 
     // execute the top level plan with one thread per partition
+    let filter_partitions = filter_exec.execute();
     let mut handles = vec![];
     for partition in &filter_partitions {
         let partition = partition.clone();
@@ -83,12 +82,12 @@ impl ExecutionPlan for ParquetExec {
 
 /// Selection e.g. apply predicate to filter rows from the record batches
 struct FilterExec {
-    input: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>,
+    input: Arc<ExecutionPlan>,
     predicate: String,
 }
 
 impl FilterExec {
-    pub fn new(input: Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>>, predicate: String) -> Self {
+    pub fn new(input: Arc<ExecutionPlan>, predicate: String) -> Self {
         Self { input, predicate }
     }
 }
@@ -96,6 +95,7 @@ impl FilterExec {
 impl ExecutionPlan for FilterExec {
     fn execute(&self) -> Vec<Arc<Mutex<ThreadSafeRecordBatchIterator>>> {
         self.input
+            .execute()
             .iter()
             .map(|p| {
                 Arc::new(Mutex::new(FilterPartition { input: p.clone() }))
